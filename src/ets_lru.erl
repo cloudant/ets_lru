@@ -30,7 +30,6 @@
     code_change/3
 ]).
 
-
 -record(entry, {
     key,
     val,
@@ -45,7 +44,9 @@
 
     max_objs,
     max_size,
-    max_lifetime
+    max_lifetime,
+
+    skip_fun=fun(_, _) -> false end
 }).
 
 
@@ -117,7 +118,7 @@ handle_call({insert, Key, Val}, _From, St) ->
     Pattern = #entry{key=Key, atime='$1', _='_'},
     case ets:match(St#st.objects, Pattern) of
         [[ATime]] ->
-            Update = {#entry.val, Val},
+            Update = [{#entry.val, Val}, {#entry.atime, NewATime}],
             true = ets:update_element(St#st.objects, Key, Update),
             true = ets:delete(St#st.atimes, ATime),
             true = ets:insert(St#st.atimes, {NewATime, Key});
@@ -150,17 +151,17 @@ handle_call(clear, _From, St) ->
     % entries because its now empty.
     {reply, ok, St};
 
-
 handle_call(Msg, _From, St) ->
     {stop, {invalid_call, Msg}, {invalid_call, Msg}, St}.
 
 
 handle_cast({accessed, Key}, St) ->
-    accessed(Key, St),
+    accessed(St, Key),
     {noreply, St, 0};
 
 handle_cast(stop, St) ->
     {stop, normal, St};
+
 
 handle_cast(Msg, St) ->
     {stop, {invalid_cast, Msg}, St}.
@@ -174,11 +175,39 @@ handle_info(Msg, St) ->
     {stop, {invalid_info, Msg}, St}.
 
 
+code_change(_OldVsn, St, _Extra) when not is_record(St, st) ->
+    {st, Objs, ATimes, CTimes, MaxObjs, MaxSize, MaxLife} = St,
+    St0 = #st{
+        objects=Objs,
+        atimes=ATimes,
+        ctimes=CTimes,
+        max_objs=MaxObjs,
+        max_size=MaxSize,
+        max_lifetime=MaxLife,
+        skip_fun=fun(_, _) -> false end
+    },
+    {ok, St0};
+
 code_change(_OldVsn, St, _Extra) ->
     {ok, St}.
 
+% Internal
 
-accessed(Key, St) ->
+maybe_drop_key(St, Key, Val) ->
+    SkipFun = St#st.skip_fun,
+    case SkipFun(Key, Val) of
+        true ->
+            skipped;
+        false ->
+            Pattern = #entry{key=Key, atime='$1', ctime='$2', _='_'},
+            [[ATime, CTime]] = ets:match(St#st.objects, Pattern),
+            true = ets:delete(St#st.objects, Key),
+            true = ets:delete(St#st.atimes, ATime),
+            true = ets:delete(St#st.ctimes, CTime)
+    end.
+
+
+accessed(St, Key) ->
     Pattern = #entry{key=Key, atime='$1', _='_'},
     case ets:match(St#st.objects, Pattern) of
         [[ATime]] ->
@@ -199,64 +228,69 @@ trim(St) ->
     trim_lifetime(St).
 
 
-trim_count(#st{max_objs=undefined}) ->
+should_trim_count(#st{max_objs=undefined}) ->
+    false;
+should_trim_count(St=#st{max_objs=Max}) ->
+    ets:info(St#st.objects, size) > Max.
+
+
+trim_count(St) ->
+    trim_by_access_time(St, fun should_trim_count/1).
+
+
+should_trim_size(#st{max_size=undefined}) ->
+    false;
+should_trim_size(#st{max_size=Max}=St) ->
+    ets:info(St#st.objects, memory) > Max.
+trim_size(St) ->
+    trim_by_access_time(St, fun should_trim_size/1).
+
+
+trim_by_access_time(St, WhileFun) ->
+    trim_by_access_time(St, WhileFun, ets:first(St#st.atimes)).
+
+trim_by_access_time(_St, _WhileFun, '$end_of_table') ->
     ok;
-trim_count(#st{max_objs=Max}=St) ->
-    case ets:info(St#st.objects, size) > Max of
+trim_by_access_time(St, WhileFun, Current) ->
+    case WhileFun(St) of
         true ->
-            drop_lru(St, fun trim_count/1);
+            [{_ATime, Key}] = ets:lookup(St#st.atimes, Current),
+            [#entry{val=Val}] = ets:lookup(St#st.objects, Key),
+            maybe_drop_key(St, Key, Val),
+            trim_by_access_time(St, WhileFun, ets:next(St#st.atimes, Current));
         false ->
             ok
     end.
 
 
-trim_size(#st{max_size=undefined}) ->
-    ok;
-trim_size(#st{max_size=Max}=St) ->
-    case ets:info(St#st.objects, memory) > Max of
-        true ->
-            drop_lru(St, fun trim_size/1);
-        false ->
-            ok
-    end.
-
-
-trim_lifetime(#st{max_lifetime=undefined}) ->
-    ok;
-trim_lifetime(#st{max_lifetime=Max}=St) ->
+should_trim_lifetime(#st{max_lifetime=undefined}, _CTime) ->
+    false;
+should_trim_lifetime(_St, '$end_of_table') ->
+    false;
+should_trim_lifetime(#st{max_lifetime=Max}, CTime) ->
     Now = os:timestamp(),
-    case ets:first(St#st.ctimes) of
-        '$end_of_table' ->
-            ok;
-        CTime ->
-            DiffInMilli = timer:now_diff(Now, CTime) div 1000,
-            case DiffInMilli > Max of
-                true ->
-                    [{CTime, Key}] = ets:lookup(St#st.ctimes, CTime),
-                    Pattern = #entry{key=Key, atime='$1', _='_'},
-                    [[ATime]] = ets:match(St#st.objects, Pattern),
-                    true = ets:delete(St#st.objects, Key),
-                    true = ets:delete(St#st.atimes, ATime),
-                    true = ets:delete(St#st.ctimes, CTime),
-                    trim_lifetime(St);
-                false ->
-                    ok
-            end
+    DiffInMilli = timer:now_diff(Now, CTime) div 1000,
+    DiffInMilli > Max.
+
+
+trim_lifetime(St) ->
+    First = ets:first(St#st.ctimes),
+    case should_trim_lifetime(St, First) of
+        true ->
+            trim_lifetime(St, First);
+        false ->
+            ok
     end.
 
-
-drop_lru(St, Continue) ->
-    case ets:first(St#st.atimes) of
-        '$end_of_table' ->
-            empty;
-        ATime ->
-            [{ATime, Key}] = ets:lookup(St#st.atimes, ATime),
-            Pattern = #entry{key=Key, ctime='$1', _='_'},
-            [[CTime]] = ets:match(St#st.objects, Pattern),
-            true = ets:delete(St#st.objects, Key),
-            true = ets:delete(St#st.atimes, ATime),
-            true = ets:delete(St#st.ctimes, CTime),
-            Continue(St)
+trim_lifetime(St, Current) ->
+    case should_trim_lifetime(St, Current) of
+        true ->
+            [{_CTime, Key}] = ets:lookup(St#st.ctimes, Current),
+            [#entry{val=Val}] = ets:lookup(St#st.objects, Key),
+            maybe_drop_key(St, Key, Val),
+            trim_lifetime(St, ets:next(St#st.ctimes, Current));
+        false ->
+            ok
     end.
 
 
@@ -281,6 +315,8 @@ set_options(St, [{max_size, N} | Rest]) when is_integer(N), N > 0 ->
     set_options(St#st{max_size=N}, Rest);
 set_options(St, [{max_lifetime, N} | Rest]) when is_integer(N), N > 0 ->
     set_options(St#st{max_lifetime=N}, Rest);
+set_options(St, [{skip_fun, Fun} | Rest]) when is_function(Fun) ->
+    set_options(St#st{skip_fun=Fun}, Rest);
 set_options(_, [Opt | _]) ->
     throw({invalid_option, Opt}).
 
