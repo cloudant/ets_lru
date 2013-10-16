@@ -35,5 +35,12 @@ check: build etap
 %.beam: %.erl
 	erlc -o test/ $<
 
+build-plt:
+	dialyzer --build_plt --output_plt .ets_lru.plt \
+		--apps erts kernel stdlib
+
+dialyze:
+	dialyzer --src src --plt .ets_lru.plt --no_native -Werror_handling \
+	-Wrace_conditions -Wunmatched_returns
 
 .PHONY: all clean distclean deps build eunit check
