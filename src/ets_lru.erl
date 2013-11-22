@@ -1,7 +1,8 @@
 % Copyright 2012 Cloudant. All rights reserved.
 
 -module(ets_lru).
--behavior(gen_server).
+-behaviour(gen_server).
+-vsn(1).
 
 
 -export([
