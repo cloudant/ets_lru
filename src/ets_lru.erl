@@ -88,7 +88,7 @@ match(LRU, KeySpec, ValueSpec) ->
 match_object(Name, KeySpec, ValueSpec) when is_atom(Name) ->
     Pattern = #entry{key=KeySpec, val=ValueSpec, _='_'},
     Entries = ets:match_object(obj_table(Name), Pattern),
-    Values = lists:map(fun(#entry{key=Key,val=Val}) ->
+    lists:map(fun(#entry{key=Key,val=Val}) ->
         gen_server:cast(Name, {accessed, Key}),
         Val
     end, Entries);
