@@ -8,7 +8,6 @@ clean:
 	$(REBAR) clean
 	rm -rf logs
 	rm -rf .eunit
-	rm -f test/*.beam
 
 
 distclean: clean
@@ -25,15 +24,12 @@ build: deps
 	$(REBAR) compile
 
 
-etap: test/etap.beam test/tutil.beam
-	prove test/*.t
+eunit:
+	$(REBAR) eunit
 
 
-check: build etap
+check: build eunit
 
-
-%.beam: %.erl
-	erlc -o test/ $<
 
 build-plt:
 	dialyzer --build_plt --output_plt .ets_lru.plt \

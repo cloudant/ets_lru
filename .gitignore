@@ -2,4 +2,3 @@ erl_crash.dump
 *.plt
 .eunit/
 ebin/
-test/*.beam
