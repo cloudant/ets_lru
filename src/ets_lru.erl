@@ -170,7 +170,7 @@ handle_call({insert, Key, Val}, _From, St) ->
     Pattern = #entry{key=Key, atime='$1', _='_'},
     case ets:match(St#st.objects, Pattern) of
         [[ATime]] ->
-            Update = {#entry.val, Val},
+            Update = [{#entry.val, Val},{#entry.atime, NewATime}],
             true = ets:update_element(St#st.objects, Key, Update),
             true = ets:delete(St#st.atimes, ATime),
             true = ets:insert(St#st.atimes, {NewATime, Key});
