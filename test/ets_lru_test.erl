@@ -79,6 +79,22 @@ basic_behavior_test_() ->
                 ?_assertEqual(ok, ets_lru:clear(LRU))},
             {"Lookup returned not_found after a clear",
                 ?_assertEqual(not_found, ets_lru:lookup(LRU, foo))}]
+        end,
+        fun({ok, LRU}) ->
+            [{"Member returned 'true' on an existing key",
+                ?_assert(ets_lru:member(LRU, foo))},
+            {"Remove value",
+                ?_assertEqual(ok, ets_lru:remove(LRU, foo))},
+            {"Member returned 'false' for a missing key",
+                ?_assertNot(ets_lru:member(LRU, foo))}]
+        end,
+        fun({ok, _LRU}) ->
+            [{"Member returned 'true' on an existing key (direct ets query)",
+                ?_assert(ets_lru:member(test_lru, foo))},
+            {"Member returned 'false' for a missing key (direct ets query)",
+                ?_assertNot(ets_lru:member(test_lru, bar))},
+            {"Member returned 'false' on non-existent cache",
+                ?_assertNot(ets_lru:member(fake_lru, foo))}]
         end
     ]}.
 

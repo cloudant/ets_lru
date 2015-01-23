@@ -23,6 +23,7 @@
 
     insert/3,
     lookup/2,
+    member/2,
     match/3,
     match_object/3,
     remove/2,
@@ -74,6 +75,16 @@ stop(LRU) ->
 
 lookup(LRU, Key) ->
     gen_server:call(LRU, {lookup, Key}).
+
+
+member(LRU, Key) when is_pid(LRU) ->
+    gen_server:call(LRU, {member, Key});
+member(Name, Key) ->
+    try ets:member(obj_table(Name), Key) of
+        Bool -> Bool
+    catch
+        error:badarg -> false
+    end.
 
 
 insert(LRU, Key, Val) ->
@@ -150,6 +161,9 @@ handle_call({lookup, Key}, _From, St) ->
             not_found
     end,
     {reply, Reply, St, 0};
+
+handle_call({member, Key}, _From, St) ->
+    {reply, ets:member(St#st.objects, Key), St};
 
 handle_call({match_object, KeySpec, ValueSpec}, _From, St) ->
     Pattern = #entry{key=KeySpec, val=ValueSpec, _='_'},
