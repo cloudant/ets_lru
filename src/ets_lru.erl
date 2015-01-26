@@ -23,6 +23,7 @@
 
     insert/3,
     lookup/2,
+    member/2,
     match/3,
     match_object/3,
     remove/2,
@@ -74,6 +75,16 @@ stop(LRU) ->
 
 lookup(LRU, Key) ->
     gen_server:call(LRU, {lookup, Key}).
+
+
+member(LRU, Key) when is_pid(LRU) ->
+    gen_server:call(LRU, {member, Key});
+member(Name, Key) ->
+    try ets:member(obj_table(Name), Key) of
+        Bool -> Bool
+    catch
+        error:badarg -> false
+    end.
 
 
 insert(LRU, Key, Val) ->
@@ -151,6 +162,9 @@ handle_call({lookup, Key}, _From, St) ->
     end,
     {reply, Reply, St, 0};
 
+handle_call({member, Key}, _From, St) ->
+    {reply, ets:member(St#st.objects, Key), St};
+
 handle_call({match_object, KeySpec, ValueSpec}, _From, St) ->
     Pattern = #entry{key=KeySpec, val=ValueSpec, _='_'},
     Entries = ets:match_object(St#st.objects, Pattern),
@@ -170,7 +184,7 @@ handle_call({insert, Key, Val}, _From, St) ->
     Pattern = #entry{key=Key, atime='$1', _='_'},
     case ets:match(St#st.objects, Pattern) of
         [[ATime]] ->
-            Update = {#entry.val, Val},
+            Update = [{#entry.val, Val},{#entry.atime, NewATime}],
             true = ets:update_element(St#st.objects, Key, Update),
             true = ets:delete(St#st.atimes, ATime),
             true = ets:insert(St#st.atimes, {NewATime, Key});
